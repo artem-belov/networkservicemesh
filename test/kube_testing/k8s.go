@@ -294,6 +294,7 @@ func (o *K8s) deletePodForce(pod *v1.Pod) error {
 // Delete POD with completion check
 // Make force delete on timeout
 func (o *K8s) deletePods(pods ...*v1.Pod) error {
+	var ctx []context.Context
 	for _, pod := range pods {
 		delOpt := &metaV1.DeleteOptions{}
 		err := o.clientset.CoreV1().Pods(pod.Namespace).Delete(pod.Name, delOpt)
@@ -301,18 +302,21 @@ func (o *K8s) deletePods(pods ...*v1.Pod) error {
 			return err
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), podDeleteTimeout)
+		c, cancel := context.WithTimeout(context.Background(), podDeleteTimeout)
+		ctx = append(ctx, c)
 		defer cancel()
-		err = blockUntilPodWorking(o.clientset, ctx, pod)
+	}
+
+	for i, pod := range pods {
+		err := blockUntilPodWorking(o.clientset, ctx[i], pod)
 		if err != nil {
 			err = o.deletePodForce(pod)
 			logrus.Warnf(`The POD "%s" may continue to run on the cluster`, pod.Name)
 			if err != nil {
-				logrus.Error(err)
+				logrus.Warn(err)
 			}
 		}
 	}
-
 	return nil
 }
 
@@ -356,10 +360,8 @@ func (o *K8s) CleanupCRDs() {
 }
 
 func (l *K8s) Cleanup() {
-	for _, result := range l.pods {
-		err := l.deletePods(result)
-		Expect(err).To(BeNil())
-	}
+	err := l.deletePods(l.pods...)
+	Expect(err).To(BeNil())
 	l.pods = nil
 	l.CleanupCRDs()
 	l.CleanupConfigMaps()
